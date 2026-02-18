@@ -1,0 +1,8 @@
+fastapi==0.117.1
+uvicorn[standard]==0.35.0
+httpx==0.28.1
+redis==6.4.0
+pytest==8.4.2
+pytest-asyncio==1.2.0
+fakeredis==2.31.3
+
