@@ -6,7 +6,11 @@ OpenAI Responses API-compatible proxy server for Google Vertex AI using API Key 
 
 - OpenAI-style endpoints:
   - `POST /v1/responses`
+  - `POST /v1/responses/input_tokens`
   - `GET /v1/responses/{response_id}`
+  - `GET /v1/responses/{response_id}/input_items`
+  - `POST /v1/responses/{response_id}/cancel`
+  - `POST /v1/responses/{response_id}/compact`
   - `DELETE /v1/responses/{response_id}`
   - `GET /v1/models`
 - Inbound auth:
@@ -15,11 +19,22 @@ OpenAI Responses API-compatible proxy server for Google Vertex AI using API Key 
 - Upstream forwarding:
   - default: `https://aiplatform.googleapis.com/v1`
   - API key forwarded as `?key=<KEY>`
+- Model list fallback:
+  - when upstream model listing endpoint is unavailable, `/v1/models` returns `FALLBACK_MODELS`
+  - default includes `gemini-3-flash-preview`
 - Responses API support:
-  - non-stream + stream SSE
-  - function tool calling (`tools(type=function)`)
+  - non-stream + stream SSE + background mode (`background=true`)
+  - tool calling:
+    - `tools(type=function)` -> Vertex function declarations
+    - `tools(type=web_search_preview*)` -> Vertex `googleSearch`
+    - `tools(type=code_interpreter)` -> Vertex `codeExecution`
+    - `tools(type=file_search|computer_use_preview|image_generation|mcp|local_shell|custom|shell|apply_patch)` -> synthetic function declarations
+    - `tool_choice(type=allowed_tools)` -> Vertex `allowedFunctionNames`
   - `function_call_output` continuation
-  - text + image input
+  - text + image + file input (`input_file.file_data`) + audio input (`input_audio`)
+  - `top_logprobs` -> Vertex `responseLogprobs/logprobs`
+  - `modalities` + `audio.voice` -> Vertex `responseModalities/speechConfig`
+  - `max_tool_calls` local enforcement for function-call outputs
 - Redis persistence for `store=true` responses and `previous_response_id`
 - Strict OpenAI-style error object
 
@@ -95,7 +110,8 @@ curl "http://localhost:8080/v1/models?api_key=YOUR_GOOGLE_API_KEY"
 
 - If `GOOGLE_API_BASE` is `aiplatform.googleapis.com`, short model names are normalized to `publishers/google/models/{model}`.
 - If `GOOGLE_API_BASE` is `generativelanguage.googleapis.com`, short model names are normalized to `models/{model}`.
-- Only function tools are supported. Non-function tools return `400`.
-- Audio input/output is not supported in this version.
+- For OpenAI `file_id` image/file references, provide `file_id_map` (or `vertex.file_id_map`) to resolve IDs to URI/data URL.
+- Audio input is supported (`input_audio`). Audio output supports `modalities` and `audio.voice`; precise output encoding can be set with `vertex.generation_config`.
 - CORS is disabled by default. Configure `CORS_ALLOWED_ORIGINS` to enable.
+- Configure `FALLBACK_MODELS` if your key cannot call upstream `models.list`.
 - `store=false` means no persistence; `GET/DELETE` will return `404`.

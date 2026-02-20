@@ -18,7 +18,12 @@ router = APIRouter(prefix="/v1", tags=["models"])
 async def list_models(request: Request) -> JSONResponse:
     api_key = extract_api_key(request)
     client = _get_gemini_client(request)
-    models = await client.list_models(api_key)
+    try:
+        models = await client.list_models(api_key)
+    except APIError as exc:
+        if exc.status_code != 404:
+            raise
+        models = []
 
     items: list[dict[str, Any]] = []
     for model in models:
@@ -36,6 +41,20 @@ async def list_models(request: Request) -> JSONResponse:
                 "owned_by": "google",
             }
         )
+
+    if not items:
+        fallback_models = tuple(getattr(request.app.state.settings, "fallback_models", ()) or ())
+        for model_id in fallback_models:
+            if not isinstance(model_id, str) or not model_id.strip():
+                continue
+            items.append(
+                {
+                    "id": model_id.strip(),
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "google",
+                }
+            )
 
     items.sort(key=lambda item: item["id"])
     return JSONResponse({"object": "list", "data": items})

@@ -46,6 +46,7 @@ class Settings:
     google_api_base: str
     upstream_first_byte_timeout_seconds: int
     upstream_stream_read_timeout_seconds: int
+    fallback_models: Tuple[str, ...]
     redis_url: str
     response_store_ttl_seconds: int
 
@@ -70,6 +71,12 @@ def get_settings() -> Settings:
         upstream_stream_read_timeout_seconds=_parse_int(
             os.getenv("UPSTREAM_STREAM_READ_TIMEOUT_SECONDS"),
             0,
+        ),
+        fallback_models=_parse_csv(
+            os.getenv(
+                "FALLBACK_MODELS",
+                "gemini-3-flash-preview,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite",
+            )
         ),
         redis_url=os.getenv("REDIS_URL", "redis://redis:6379/0"),
         response_store_ttl_seconds=_parse_int(os.getenv("RESPONSE_STORE_TTL_SECONDS"), 86400),
