@@ -34,13 +34,21 @@ def usage_from_google(usage: Optional[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def make_message_output_item(text: str, *, item_id: Optional[str] = None) -> dict[str, Any]:
+def make_message_output_item(
+    text: str,
+    *,
+    item_id: Optional[str] = None,
+    logprobs: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    content_block: dict[str, Any] = {"type": "output_text", "text": text, "annotations": []}
+    if isinstance(logprobs, dict):
+        content_block["logprobs"] = logprobs
     return {
         "id": item_id or new_item_id("msg"),
         "type": "message",
         "status": "completed",
         "role": "assistant",
-        "content": [{"type": "output_text", "text": text, "annotations": []}],
+        "content": [content_block],
     }
 
 
@@ -69,18 +77,27 @@ def make_response_object(
     usage: Optional[dict[str, int]] = None,
     status: str = "completed",
     created_at: Optional[int] = None,
+    incomplete_details: Optional[dict[str, Any]] = None,
+    error: Optional[dict[str, Any]] = None,
+    extra_fields: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    return {
+    response_payload = {
         "id": response_id,
         "object": "response",
         "created_at": created_at or int(time.time()),
         "status": status,
-        "error": None,
-        "incomplete_details": None,
+        "error": error,
+        "incomplete_details": incomplete_details,
         "model": model,
         "output": output,
         "usage": usage or {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
     }
+    if isinstance(extra_fields, dict):
+        for key, value in extra_fields.items():
+            if key in response_payload:
+                continue
+            response_payload[key] = value
+    return response_payload
 
 
 def translate_google_response_to_openai(
@@ -88,17 +105,29 @@ def translate_google_response_to_openai(
     google_payload: dict[str, Any],
     model: str,
     response_id: str,
+    extra_fields: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     output: list[dict[str, Any]] = []
     text_parts: list[str] = []
+    text_logprobs: Optional[dict[str, Any]] = None
+    status = "completed"
+    incomplete_details: Optional[dict[str, Any]] = None
 
     for candidate in google_payload.get("candidates", []) or []:
         if not isinstance(candidate, dict):
             continue
+        candidate_finish_reason = candidate.get("finishReason")
+        incomplete_reason = _map_finish_reason_to_incomplete_reason(candidate_finish_reason)
+        if incomplete_reason:
+            status = "incomplete"
+            incomplete_details = {"reason": incomplete_reason}
         content = candidate.get("content")
         parts = content.get("parts") if isinstance(content, dict) else []
         if not isinstance(parts, list):
             continue
+        candidate_logprobs = candidate.get("logprobsResult")
+        if text_logprobs is None and isinstance(candidate_logprobs, dict):
+            text_logprobs = candidate_logprobs
         for part in parts:
             if not isinstance(part, dict):
                 continue
@@ -115,15 +144,28 @@ def translate_google_response_to_openai(
                 output.append(make_function_call_item(name, arguments))
 
     if text_parts:
-        output.insert(0, make_message_output_item("".join(text_parts)))
+        output.insert(0, make_message_output_item("".join(text_parts), logprobs=text_logprobs))
 
     return make_response_object(
         response_id=response_id,
         model=model,
         output=output,
         usage=usage_from_google(google_payload.get("usageMetadata")),
-        status="completed",
+        status=status,
+        incomplete_details=incomplete_details,
+        extra_fields=extra_fields,
     )
+
+
+def _map_finish_reason_to_incomplete_reason(finish_reason: Any) -> Optional[str]:
+    if not isinstance(finish_reason, str):
+        return None
+    normalized = finish_reason.upper()
+    if normalized == "MAX_TOKENS":
+        return "max_output_tokens"
+    if normalized in {"SAFETY", "RECITATION", "OTHER"}:
+        return "content_filter"
+    return None
 
 
 def build_stored_record(
@@ -156,6 +198,7 @@ def sse_event(event_type: str, payload: dict[str, Any]) -> str:
 class StreamAggregateState:
     response_id: str
     model: str
+    extra_fields: dict[str, Any] = field(default_factory=dict)
     created_at: int = field(default_factory=lambda: int(time.time()))
     text_item_id: str = field(default_factory=lambda: new_item_id("msg"))
     text_value: str = ""
@@ -203,4 +246,5 @@ class StreamAggregateState:
             usage=self.usage,
             status="completed",
             created_at=self.created_at,
+            extra_fields=self.extra_fields,
         )
