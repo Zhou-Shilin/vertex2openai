@@ -197,6 +197,46 @@ class GoogleGeminiClient:
             raise last_error
         return models
 
+    async def count_tokens(self, model: str, payload: dict[str, Any], api_key: str) -> dict[str, Any]:
+        url = f"{self._api_base}/{self._normalize_model(model)}:countTokens"
+        try:
+            response = await self._http.post(url, params={"key": api_key}, json=payload)
+        except httpx.TimeoutException as exc:
+            raise APIError(
+                "Upstream request timed out.",
+                504,
+                error_type="server_error",
+                code="upstream_timeout",
+            ) from exc
+        except httpx.RequestError as exc:
+            raise APIError(
+                f"Failed to reach upstream service: {exc.__class__.__name__}.",
+                502,
+                error_type="server_error",
+                code="upstream_connection_error",
+            ) from exc
+
+        if response.status_code >= 400:
+            raise self._build_upstream_error(response.status_code, response.text)
+
+        try:
+            payload_json = response.json()
+        except json.JSONDecodeError as exc:
+            raise APIError(
+                "Upstream returned invalid JSON.",
+                502,
+                error_type="server_error",
+                code="upstream_invalid_json",
+            ) from exc
+        if isinstance(payload_json, dict):
+            return payload_json
+        raise APIError(
+            "Upstream returned invalid token-count payload.",
+            502,
+            error_type="server_error",
+            code="upstream_invalid_json",
+        )
+
     async def _read_next_sse_payload(
         self,
         line_iterator: Any,

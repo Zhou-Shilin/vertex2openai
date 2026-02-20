@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import uuid
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
@@ -38,6 +39,7 @@ def create_app(
         app.state.gemini_client = None
         app.state.response_store = None
         app.state.http_client = None
+        app.state.background_tasks = {}
         app.state._injected_gemini_client = injected_gemini_client
         app.state._injected_response_store = injected_response_store
         app.state._owns_http_client = False
@@ -67,6 +69,19 @@ def create_app(
         try:
             yield
         finally:
+            background_tasks = dict(getattr(app.state, "background_tasks", {}) or {})
+            for task in background_tasks.values():
+                if hasattr(task, "done") and not task.done():
+                    task.cancel()
+            if background_tasks:
+                await asyncio.gather(
+                    *[
+                        task
+                        for task in background_tasks.values()
+                        if hasattr(task, "done")
+                    ],
+                    return_exceptions=True,
+                )
             if app.state._owns_response_store and app.state.response_store is not None:
                 await app.state.response_store.close()
                 app.state.response_store = None
@@ -139,7 +154,15 @@ def create_app(
             {
                 "name": "vertex2openai",
                 "message": "OpenAI-compatible Responses API proxy for Google Gemini",
-                "endpoints": ["/v1/responses", "/v1/models"],
+                "endpoints": [
+                    "/v1/responses",
+                    "/v1/responses/input_tokens",
+                    "/v1/responses/{response_id}",
+                    "/v1/responses/{response_id}/input_items",
+                    "/v1/responses/{response_id}/cancel",
+                    "/v1/responses/{response_id}/compact",
+                    "/v1/models",
+                ],
             }
         )
 
@@ -155,6 +178,9 @@ def _configure_logging(level: str) -> None:
         level=numeric_level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # Avoid logging full upstream URLs that include API keys in query parameters.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 app = create_app()
